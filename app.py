@@ -13,82 +13,20 @@ import threading
 import urllib3
 import random
 import time
-import subprocess
-import os
-import sys
 from datetime import datetime
 
 # Configuration
 TOKEN_BATCH_SIZE = 99999
 RETRY_ATTEMPTS = 0  # Number of retry attempts for failed requests
-PROFILE_RETRY_ATTEMPTS = 3 # Increased retry attempts for profile check
+PROFILE_RETRY_ATTEMPTS = 1  # Increased retry attempts for profile check
 PROFILE_RETRY_DELAY = 0.1  # Increased delay to 0.5 seconds
-JWT_RUN_INTERVAL = 3 * 60 * 60  # 3 hours in seconds
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Global State for Batch Management
 current_batch_indices = {}
 batch_indices_lock = threading.Lock()
 
-def run_jwt_scripts():
-    """Function to run both jwt.py and visit_jwt.py"""
-    try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # List of scripts to run
-        scripts_to_run = ["jwt.py", "visit_jwt.py"]
-        
-        for script_name in scripts_to_run:
-            script_path = os.path.join(script_dir, script_name)
-            
-            if os.path.exists(script_path):
-                print(f"[{datetime.now()}] Running {script_name}...")
-                try:
-                    result = subprocess.run([sys.executable, script_path], 
-                                          capture_output=True, 
-                                          text=True,
-                                          timeout=3000)  # 50 minute timeout
-                    
-                    if result.returncode == 0:
-                        print(f"[{datetime.now()}] {script_name} executed successfully!")
-                        if result.stdout:
-                            print(f"Output: {result.stdout[:500]}")  # Print first 500 chars
-                    else:
-                        print(f"[{datetime.now()}] {script_name} failed with error code {result.returncode}")
-                        if result.stderr:
-                            print(f"Error: {result.stderr[:500]}")
-                except subprocess.TimeoutExpired:
-                    print(f"[{datetime.now()}] {script_name} execution timed out after 5 minutes")
-                except Exception as e:
-                    print(f"[{datetime.now()}] Error running {script_name}: {e}")
-            else:
-                print(f"[{datetime.now()}] {script_name} not found at {script_path}")
-                
-    except Exception as e:
-        print(f"[{datetime.now()}] Error in run_jwt_scripts: {e}")
 
-def schedule_jwt_runner():
-    """Run jwt scripts every 3 hours using threading.Timer"""
-    run_jwt_scripts()
-    # Schedule next run after 3 hours
-    timer = threading.Timer(JWT_RUN_INTERVAL, schedule_jwt_runner)
-    timer.daemon = True
-    timer.start()
-
-# Run once on startup (after 2 seconds)
-def run_jwt_on_startup():
-    time.sleep(2)
-    run_jwt_scripts()
-    # Start the scheduler after first run
-    time.sleep(2)
-    schedule_jwt_runner()
-
-# Start the initial run in a background thread
-initial_run_thread = threading.Thread(target=run_jwt_on_startup)
-initial_run_thread.daemon = True
-initial_run_thread.start()
-
-# Rest of your original functions...
 def get_next_batch_tokens(server_name, all_tokens):
     if not all_tokens:
         return []
@@ -122,6 +60,7 @@ def get_next_batch_tokens(server_name, all_tokens):
         
         return batch_tokens
 
+
 def get_random_batch_tokens(server_name, all_tokens):
     """Alternative method: use random sampling for better distribution"""
     if not all_tokens:
@@ -135,6 +74,7 @@ def get_random_batch_tokens(server_name, all_tokens):
     
     # Randomly select tokens without replacement
     return random.sample(all_tokens, TOKEN_BATCH_SIZE)
+
 
 def load_tokens(server_name, for_visit=False):
     if for_visit:
@@ -168,6 +108,7 @@ def load_tokens(server_name, for_visit=False):
         print(f"Warning: Token file {path} contains invalid JSON. Returning empty list.")
         return []
 
+
 def encrypt_message(plaintext):
     key = b'Yg&tc%DEuh6%Zc^8'
     iv = b'6oyZDr22E3ychjM%'
@@ -176,11 +117,13 @@ def encrypt_message(plaintext):
     encrypted_message = cipher.encrypt(padded_message)
     return binascii.hexlify(encrypted_message).decode('utf-8')
 
+
 def create_protobuf_message(user_id, region):
     message = like_pb2.like()
     message.uid = int(user_id)
     message.region = region
     return message.SerializeToString()
+
 
 def create_protobuf_for_profile_check(uid):
     message = uid_generator_pb2.uid_generator()
@@ -188,10 +131,12 @@ def create_protobuf_for_profile_check(uid):
     message.teamXdarks = 1
     return message.SerializeToString()
 
+
 def enc_profile_check_payload(uid):
     protobuf_data = create_protobuf_for_profile_check(uid)
     encrypted_uid = encrypt_message(protobuf_data)
     return encrypted_uid
+
 
 async def send_single_like_request(encrypted_like_payload, token_dict, url, retry_count=0):
     edata = bytes.fromhex(encrypted_like_payload)
@@ -209,15 +154,14 @@ async def send_single_like_request(encrypted_like_payload, token_dict, url, retr
         'Expect': "100-continue",
         'X-Unity-Version': "2018.4.11f1",
         'X-GA': "v1 1",
-        'ReleaseVersion': "OB54"
+        'ReleaseVersion': "OB55"
     }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, data=edata, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status != 200 and retry_count < RETRY_ATTEMPTS:
-                    # Retry once if failed
                     print(f"Retrying failed request for token {token_value[:10]}... (Attempt {retry_count + 1})")
-                    await asyncio.sleep(0.5)  # Small delay before retry
+                    await asyncio.sleep(0.5)
                     return await send_single_like_request(encrypted_like_payload, token_dict, url, retry_count + 1)
                 return response.status
     except asyncio.TimeoutError:
@@ -234,6 +178,7 @@ async def send_single_like_request(encrypted_like_payload, token_dict, url, retr
             return await send_single_like_request(encrypted_like_payload, token_dict, url, retry_count + 1)
         print(f"Exception in send_single_like_request for token {token_value[:10]}... after retry: {e}")
         return 997
+
 
 async def send_likes_with_token_batch(uid, server_region_for_like_proto, like_api_url, token_batch_to_use):
     if not token_batch_to_use:
@@ -254,6 +199,7 @@ async def send_likes_with_token_batch(uid, server_region_for_like_proto, like_ap
     print(f"Attempted {len(token_batch_to_use)} like sends from batch. Successful: {successful_sends}, Failed/Error: {failed_sends}")
     return results
 
+
 def make_profile_check_request(encrypted_profile_payload, server_name, token_dict, retry_count=0):
     token_value = token_dict.get("token", "")
     if not token_value:
@@ -261,11 +207,11 @@ def make_profile_check_request(encrypted_profile_payload, server_name, token_dic
         return None
 
     if server_name == "IND":
-        url = "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
+        url = "https://clientbp.freefireind.in/GetPlayerPersonalShow"
     elif server_name in {"BR", "US", "SAC", "NA"}:
         url = "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
     else:
-        url = "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
+        url = "https://clientbp.ppmainecoonghj.com/GetPlayerPersonalShow"
 
     edata = bytes.fromhex(encrypted_profile_payload)
     headers = {
@@ -277,15 +223,14 @@ def make_profile_check_request(encrypted_profile_payload, server_name, token_dic
         'Expect': "100-continue",
         'X-Unity-Version': "2018.4.11f1",
         'X-GA': "v1 1",
-        'ReleaseVersion': "OB54"
+        'ReleaseVersion': "OB55"
     }
     try:
         response = requests.post(url, data=edata, headers=headers, verify=False, timeout=10)
         
-        # Handle 429 Too Many Requests specially
         if response.status_code == 429:
             if retry_count < PROFILE_RETRY_ATTEMPTS:
-                wait_time = PROFILE_RETRY_DELAY * (retry_count + 1)  # Exponential backoff
+                wait_time = PROFILE_RETRY_DELAY * (retry_count + 1)
                 print(f"Rate limited (429), retrying profile check after {wait_time}s (Attempt {retry_count + 1})")
                 time.sleep(wait_time)
                 return make_profile_check_request(encrypted_profile_payload, server_name, token_dict, retry_count + 1)
@@ -317,6 +262,7 @@ def make_profile_check_request(encrypted_profile_payload, server_name, token_dic
         print(f"Unexpected error in make_profile_check_request for token {token_value[:10]}... processing response: {e}")
     return None
 
+
 def decode_protobuf_profile_info(binary_data):
     try:
         items = like_count_pb2.Info()
@@ -326,14 +272,16 @@ def decode_protobuf_profile_info(binary_data):
         print(f"Error decoding Protobuf profile data: {e}")
         return None
 
+
 app = Flask(__name__)
+
 
 @app.route('/like', methods=['GET'])
 def handle_requests():
     uid_param = request.args.get("uid")
     server_name_param = request.args.get("server_name", "").upper()
     use_random = request.args.get("random", "false").lower() == "true"
-    use_random_visit = request.args.get("random_visit", "true").lower() == "true"  # Default random visit tokens
+    use_random_visit = request.args.get("random_visit", "true").lower() == "true"
 
     if not uid_param or not server_name_param:
         return jsonify({"error": "UID and server_name are required"}), 400
@@ -343,24 +291,21 @@ def handle_requests():
     if not visit_tokens:
         return jsonify({"error": f"No visit tokens loaded for server {server_name_param}."}), 500
     
-    # Randomly shuffle visit tokens if random_visit is enabled
     if use_random_visit and len(visit_tokens) > 1:
         shuffled_visit_tokens = visit_tokens.copy()
         random.shuffle(shuffled_visit_tokens)
         print(f"Using RANDOM visit tokens for {server_name_param} (total {len(shuffled_visit_tokens)} tokens)")
-        visit_tokens_to_try = shuffled_visit_tokens[:5]  # Try first 5 random tokens
+        visit_tokens_to_try = shuffled_visit_tokens[:5]
     else:
         print(f"Using SEQUENTIAL visit tokens for {server_name_param}")
-        visit_tokens_to_try = visit_tokens[:5]  # Try first 5 sequential tokens
+        visit_tokens_to_try = visit_tokens[:5]
     
-    # Load regular tokens for like sending
     all_available_tokens = load_tokens(server_name_param, for_visit=False)
     if not all_available_tokens:
         return jsonify({"error": f"No tokens loaded or token file invalid for server {server_name_param}."}), 500
 
     print(f"Total tokens available for {server_name_param}: {len(all_available_tokens)}")
 
-    # Get the batch of tokens for like sending
     if use_random:
         tokens_for_like_sending = get_random_batch_tokens(server_name_param, all_available_tokens)
         print(f"Using RANDOM batch selection for {server_name_param}")
@@ -370,18 +315,16 @@ def handle_requests():
     
     encrypted_player_uid_for_profile = enc_profile_check_payload(uid_param)
     
-    # Get likes BEFORE using visit token (with retry and random tokens)
     before_info = None
     before_like_count = 0
     working_visit_token = None
 
-    # Try multiple random visit tokens
     for idx, token in enumerate(visit_tokens_to_try):
         print(f"Attempting profile check with visit token {idx + 1} (token: {token.get('token', '')[:10]}...)")
         before_info = make_profile_check_request(encrypted_player_uid_for_profile, server_name_param, token)
         if before_info and hasattr(before_info, 'AccountInfo'):
             before_like_count = int(before_info.AccountInfo.Likes)
-            working_visit_token = token  # Use this token for after check too
+            working_visit_token = token
             print(f"✓ Success with visit token {idx + 1}")
             break
         else:
@@ -390,18 +333,16 @@ def handle_requests():
     
     if not before_info:
         print(f"Could not reliably fetch 'before' profile info for UID {uid_param} on {server_name_param}.")
-        # Use first token as fallback
         working_visit_token = visit_tokens[0] if visit_tokens else None
 
     print(f"UID {uid_param} ({server_name_param}): Likes before = {before_like_count}")
 
-    # Determine the URL for sending likes
     if server_name_param == "IND":
-        like_api_url = "https://client.ind.freefiremobile.com/LikeProfile"
+        like_api_url = "https://clientbp.freefireind.in/LikeProfile"
     elif server_name_param in {"BR", "US", "SAC", "NA"}:
         like_api_url = "https://client.us.freefiremobile.com/LikeProfile"
     else:
-        like_api_url = "https://clientbp.ggpolarbear.com/LikeProfile"
+        like_api_url = "https://clientbp.ppmainecoonghj.com/LikeProfile"
 
     if tokens_for_like_sending:
         print(f"Using token batch for {server_name_param} (size {len(tokens_for_like_sending)}) to send likes.")
@@ -414,7 +355,6 @@ def handle_requests():
     else:
         print(f"Skipping like sending for UID {uid_param} as no tokens available for like sending.")
         
-    # Get likes AFTER using the working visit token
     after_info = None
     after_like_count = before_like_count
     actual_player_uid_from_profile = int(uid_param)
@@ -450,6 +390,7 @@ def handle_requests():
     }
     return jsonify(response_data)
 
+
 @app.route('/profile_info', methods=['GET'])
 def get_profile_info():
     """Separate endpoint to get profile information only"""
@@ -460,12 +401,10 @@ def get_profile_info():
     if not uid_param or not server_name_param:
         return jsonify({"error": "UID and server_name are required"}), 400
 
-    # Load visit tokens
     visit_tokens = load_tokens(server_name_param, for_visit=True)
     if not visit_tokens:
         return jsonify({"error": f"No visit tokens loaded for server {server_name_param}."}), 500
     
-    # Randomly shuffle visit tokens if random_visit is enabled
     if use_random_visit and len(visit_tokens) > 1:
         shuffled_visit_tokens = visit_tokens.copy()
         random.shuffle(shuffled_visit_tokens)
@@ -477,7 +416,6 @@ def get_profile_info():
     
     encrypted_player_uid_for_profile = enc_profile_check_payload(uid_param)
     
-    # Try multiple visit tokens
     profile_info = None
     working_token = None
     
@@ -495,7 +433,6 @@ def get_profile_info():
     if not profile_info or not hasattr(profile_info, 'AccountInfo'):
         return jsonify({"error": "Could not fetch profile information"}), 404
     
-    # Extract profile data
     account_info = profile_info.AccountInfo
     response_data = {
         "UID": int(account_info.UID),
@@ -510,6 +447,7 @@ def get_profile_info():
     }
     
     return jsonify(response_data)
+
 
 @app.route('/token_info', methods=['GET'])
 def token_info():
@@ -527,11 +465,6 @@ def token_info():
     
     return jsonify(info)
 
-@app.route('/run_jwt', methods=['POST'])
-def run_jwt_endpoint():
-    """Manual endpoint to run jwt scripts"""
-    run_jwt_scripts()
-    return jsonify({"status": "jwt.py and visit_jwt.py execution triggered"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=20886, debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
