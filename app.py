@@ -21,7 +21,7 @@ from datetime import datetime
 # Configuration
 TOKEN_BATCH_SIZE = 99999
 RETRY_ATTEMPTS = 0  # Number of retry attempts for failed requests
-PROFILE_RETRY_ATTEMPTS = 1  # Increased retry attempts for profile check
+PROFILE_RETRY_ATTEMPTS = 3 # Increased retry attempts for profile check
 PROFILE_RETRY_DELAY = 0.1  # Increased delay to 0.5 seconds
 JWT_RUN_INTERVAL = 3 * 60 * 60  # 3 hours in seconds
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
